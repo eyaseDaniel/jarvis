@@ -132,6 +132,8 @@ main() {
 
   if [ -d "$INSTALL_DIR/.git" ]; then
     info "Existing installation found. Updating..."
+    # Reset any local modifications (e.g. corrupted files from previous installs)
+    git -C "$INSTALL_DIR" checkout -- . 2>/dev/null || true
     git -C "$INSTALL_DIR" pull --ff-only 2>/dev/null || {
       warn "Could not fast-forward. Re-cloning..."
       rm -rf "$INSTALL_DIR"
@@ -156,6 +158,10 @@ main() {
   cd "$INSTALL_DIR"
   bun install --frozen-lockfile 2>/dev/null || bun install
   ok "Dependencies installed"
+
+  # Clean stale global links before re-linking
+  rm -f "$HOME/.bun/bin/jarvis" 2>/dev/null || true
+  bun unlink @jarvis-ai/daemon 2>/dev/null || true
 
   # Link the jarvis command globally via bun link
   bun link 2>/dev/null || true
