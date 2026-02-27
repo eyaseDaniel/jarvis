@@ -281,11 +281,16 @@ export class BackgroundAgentService implements Service, IAgentService {
   private loadActiveRole(): RoleDefinition {
     const roleName = this.config.active_role;
 
+    // Package-root-relative paths for global install compatibility
+    const pkgRoot = join(import.meta.dir, '../..');
     const paths = [
+      join(pkgRoot, `roles/${roleName}.yaml`),
+      join(pkgRoot, `roles/${roleName}.yml`),
+      join(pkgRoot, `config/roles/${roleName}.yaml`),
+      join(pkgRoot, `config/roles/${roleName}.yml`),
+      // Also try CWD-relative for local dev
       `roles/${roleName}.yaml`,
       `roles/${roleName}.yml`,
-      `config/roles/${roleName}.yaml`,
-      `config/roles/${roleName}.yml`,
     ];
 
     for (const rolePath of paths) {

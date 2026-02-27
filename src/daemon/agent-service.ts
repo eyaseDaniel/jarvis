@@ -6,6 +6,7 @@
  * commitments, and observations.
  */
 
+import { join } from 'node:path';
 import type { Service, ServiceStatus } from './services.ts';
 import type { JarvisConfig } from '../config/types.ts';
 import type { LLMStreamEvent } from '../llm/provider.ts';
@@ -376,12 +377,16 @@ export class AgentService implements Service, IAgentService {
   private loadActiveRole(): RoleDefinition {
     const roleName = this.config.active_role;
 
-    // Try multiple locations for role YAML
+    // Try multiple locations for role YAML (package-root-relative for global install)
+    const pkgRoot = join(import.meta.dir, '../..');
     const paths = [
+      join(pkgRoot, `roles/${roleName}.yaml`),
+      join(pkgRoot, `roles/${roleName}.yml`),
+      join(pkgRoot, `config/roles/${roleName}.yaml`),
+      join(pkgRoot, `config/roles/${roleName}.yml`),
+      // Also try CWD-relative for local dev
       `roles/${roleName}.yaml`,
       `roles/${roleName}.yml`,
-      `config/roles/${roleName}.yaml`,
-      `config/roles/${roleName}.yml`,
     ];
 
     for (const rolePath of paths) {

@@ -85,30 +85,35 @@ function findWSLCandidates(): BrowserExecutable[] {
   ];
 }
 
+/** Exported for reuse by deps.ts dependency checker. */
+export const LINUX_BROWSER_PATHS: BrowserExecutable[] = [
+  { kind: 'chrome', path: '/usr/bin/google-chrome' },
+  { kind: 'chrome', path: '/usr/bin/google-chrome-stable' },
+  { kind: 'chrome', path: '/usr/bin/chrome' },
+  { kind: 'brave', path: '/usr/bin/brave-browser' },
+  { kind: 'brave', path: '/usr/bin/brave-browser-stable' },
+  { kind: 'edge', path: '/usr/bin/microsoft-edge' },
+  { kind: 'edge', path: '/usr/bin/microsoft-edge-stable' },
+  { kind: 'chromium', path: '/usr/bin/chromium' },
+  { kind: 'chromium', path: '/usr/bin/chromium-browser' },
+  { kind: 'chromium', path: '/snap/bin/chromium' },
+];
+
+/** Exported for reuse by deps.ts dependency checker. */
+export const MACOS_BROWSER_PATHS: BrowserExecutable[] = [
+  { kind: 'chrome', path: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' },
+  { kind: 'chrome', path: join(homedir(), 'Applications/Google Chrome.app/Contents/MacOS/Google Chrome') },
+  { kind: 'brave', path: '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser' },
+  { kind: 'edge', path: '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge' },
+  { kind: 'chromium', path: '/Applications/Chromium.app/Contents/MacOS/Chromium' },
+];
+
 function findLinuxCandidates(): BrowserExecutable[] {
-  return [
-    { kind: 'chrome', path: '/usr/bin/google-chrome' },
-    { kind: 'chrome', path: '/usr/bin/google-chrome-stable' },
-    { kind: 'chrome', path: '/usr/bin/chrome' },
-    { kind: 'brave', path: '/usr/bin/brave-browser' },
-    { kind: 'brave', path: '/usr/bin/brave-browser-stable' },
-    { kind: 'edge', path: '/usr/bin/microsoft-edge' },
-    { kind: 'edge', path: '/usr/bin/microsoft-edge-stable' },
-    { kind: 'chromium', path: '/usr/bin/chromium' },
-    { kind: 'chromium', path: '/usr/bin/chromium-browser' },
-    { kind: 'chromium', path: '/snap/bin/chromium' },
-  ];
+  return LINUX_BROWSER_PATHS;
 }
 
 function findMacCandidates(): BrowserExecutable[] {
-  const home = homedir();
-  return [
-    { kind: 'chrome', path: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' },
-    { kind: 'chrome', path: join(home, 'Applications/Google Chrome.app/Contents/MacOS/Google Chrome') },
-    { kind: 'brave', path: '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser' },
-    { kind: 'edge', path: '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge' },
-    { kind: 'chromium', path: '/Applications/Chromium.app/Contents/MacOS/Chromium' },
-  ];
+  return MACOS_BROWSER_PATHS;
 }
 
 function findWindowsCandidates(): BrowserExecutable[] {

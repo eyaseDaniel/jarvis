@@ -5,15 +5,20 @@
  * Returns a map of role definitions and a formatted list for system prompts.
  */
 
+import { join } from 'node:path';
 import { loadRolesFromDir } from '../roles/loader.ts';
 import type { RoleDefinition } from '../roles/types.ts';
 
+/** Package root — resolves correctly whether running from repo or global install */
+const PACKAGE_ROOT = join(import.meta.dir, '../..');
+
 /**
  * Discover specialist roles from a directory.
- * Wraps loadRolesFromDir for consistency.
+ * Resolves relative paths against the package root (not CWD).
  */
 export function discoverSpecialists(dir: string): Map<string, RoleDefinition> {
-  return loadRolesFromDir(dir);
+  const resolved = dir.startsWith('/') ? dir : join(PACKAGE_ROOT, dir);
+  return loadRolesFromDir(resolved);
 }
 
 /**

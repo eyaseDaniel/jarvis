@@ -42,6 +42,40 @@ function deepMerge(target: any, source: any): any {
   return result;
 }
 
+/**
+ * Apply environment variable overrides to config.
+ * Env vars take highest precedence (over YAML and defaults).
+ */
+function applyEnvOverrides(config: JarvisConfig): void {
+  const env = process.env;
+
+  if (env.JARVIS_PORT) {
+    const port = parseInt(env.JARVIS_PORT, 10);
+    if (!isNaN(port)) config.daemon.port = port;
+  }
+
+  if (env.JARVIS_HOME) {
+    const home = env.JARVIS_HOME;
+    config.daemon.data_dir = home;
+    config.daemon.db_path = join(home, 'jarvis.db');
+  }
+
+  if (env.JARVIS_API_KEY) {
+    if (!config.llm.anthropic) config.llm.anthropic = { api_key: '', model: 'claude-sonnet-4-5-20250929' };
+    config.llm.anthropic.api_key = env.JARVIS_API_KEY;
+  }
+
+  if (env.JARVIS_OPENAI_KEY) {
+    if (!config.llm.openai) config.llm.openai = { api_key: '', model: 'gpt-4o' };
+    config.llm.openai.api_key = env.JARVIS_OPENAI_KEY;
+  }
+
+  if (env.JARVIS_OLLAMA_URL) {
+    if (!config.llm.ollama) config.llm.ollama = { base_url: '', model: 'llama3' };
+    config.llm.ollama.base_url = env.JARVIS_OLLAMA_URL;
+  }
+}
+
 export async function loadConfig(configPath?: string): Promise<JarvisConfig> {
   const path = configPath || expandTilde('~/.jarvis/config.yaml');
 
@@ -54,6 +88,7 @@ export async function loadConfig(configPath?: string): Promise<JarvisConfig> {
       const config = structuredClone(DEFAULT_CONFIG);
       config.daemon.data_dir = expandTilde(config.daemon.data_dir);
       config.daemon.db_path = expandTilde(config.daemon.db_path);
+      applyEnvOverrides(config);
       return config;
     }
 
@@ -66,6 +101,9 @@ export async function loadConfig(configPath?: string): Promise<JarvisConfig> {
     // Expand tilde in paths
     config.daemon.data_dir = expandTilde(config.daemon.data_dir);
     config.daemon.db_path = expandTilde(config.daemon.db_path);
+
+    // Apply environment variable overrides
+    applyEnvOverrides(config);
 
     return config;
   } catch (err) {
