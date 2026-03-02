@@ -54,6 +54,24 @@ export type DesktopConfig = {
   snapshot_max_elements: number;
 };
 
+export type AwarenessConfig = {
+  enabled: boolean;
+  capture_interval_ms: number;
+  min_change_threshold: number;       // 0.0-1.0 pixel diff percentage
+  cloud_vision_enabled: boolean;
+  cloud_vision_cooldown_ms: number;
+  stuck_threshold_ms: number;
+  struggle_grace_ms: number;          // min time before struggle fires
+  struggle_cooldown_ms: number;       // min gap between struggle detections
+  suggestion_rate_limit_ms: number;
+  overlay_autolaunch: boolean;        // auto-open floating overlay widget on start
+  retention: {
+    full_hours: number;
+    key_moment_hours: number;
+  };
+  capture_dir: string;
+};
+
 export type PerActionOverride = {
   action: string;            // ActionCategory
   role_id?: string;
@@ -93,6 +111,7 @@ export type JarvisConfig = {
   stt?: STTConfig;
   tts?: TTSConfig;
   desktop?: DesktopConfig;
+  awareness?: AwarenessConfig;
   llm: {
     primary: string;  // provider name
     fallback: string[];
@@ -134,6 +153,23 @@ export const DEFAULT_CONFIG: JarvisConfig = {
     auto_launch: true,
     tree_depth: 5,
     snapshot_max_elements: 60,
+  },
+  awareness: {
+    enabled: true,
+    capture_interval_ms: 7000,
+    min_change_threshold: 0.02,
+    cloud_vision_enabled: true,
+    cloud_vision_cooldown_ms: 30000,
+    stuck_threshold_ms: 120000,
+    struggle_grace_ms: 120000,
+    struggle_cooldown_ms: 180000,
+    suggestion_rate_limit_ms: 60000,
+    overlay_autolaunch: true,
+    retention: {
+      full_hours: 1,
+      key_moment_hours: 24,
+    },
+    capture_dir: '~/.jarvis/captures',
   },
   llm: {
     primary: 'anthropic',

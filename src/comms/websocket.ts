@@ -135,6 +135,16 @@ export class WebSocketServer {
           return Response.json({ error: 'Not found' }, { status: 404 });
         }
 
+        // 4a. Overlay widget (served from ui/ source, not dist/)
+        if (pathname === '/overlay' && self.staticDir) {
+          // overlay.html lives in the ui/ source directory (parent of dist/)
+          const overlayPath = path.join(self.staticDir, '..', 'overlay.html');
+          const overlayFile = Bun.file(overlayPath);
+          if (await overlayFile.exists()) {
+            return new Response(overlayFile, { headers: { 'Content-Type': 'text/html' } });
+          }
+        }
+
         // 4. Static files (dashboard)
         if (self.staticDir) {
           let filePath: string;
@@ -288,6 +298,10 @@ export class WebSocketServer {
 
   getClientCount(): number {
     return this.clients.size;
+  }
+
+  getClients(): Set<ServerWebSocket<unknown>> {
+    return this.clients;
   }
 }
 

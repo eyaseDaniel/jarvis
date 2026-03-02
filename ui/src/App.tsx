@@ -14,12 +14,13 @@ const OfficePage = React.lazy(() => import("./pages/OfficePage"));
 const CommandPage = React.lazy(() => import("./pages/CommandPage"));
 const AuthorityPage = React.lazy(() => import("./pages/AuthorityPage"));
 const SettingsPage = React.lazy(() => import("./pages/SettingsPage"));
+const AwarenessPage = React.lazy(() => import("./pages/AwarenessPage"));
 
-type Route = "chat" | "tasks" | "pipeline" | "memory" | "calendar" | "office" | "knowledge" | "command" | "authority" | "settings";
+type Route = "chat" | "tasks" | "pipeline" | "memory" | "calendar" | "office" | "knowledge" | "command" | "authority" | "awareness" | "settings";
 
 function getRoute(): Route {
   const hash = window.location.hash.replace("#/", "");
-  if (["chat", "tasks", "pipeline", "memory", "calendar", "office", "knowledge", "command", "authority", "settings"].includes(hash)) {
+  if (["chat", "tasks", "pipeline", "memory", "calendar", "office", "knowledge", "command", "authority", "awareness", "settings"].includes(hash)) {
     return hash as Route;
   }
   return "chat";
@@ -119,28 +120,13 @@ export function App() {
           <NavItem icon={"\u25CB"} label="Office" route="office" active={route} onClick={navigate} />
           <NavItem icon={"\u25C7"} label="Knowledge" route="knowledge" active={route} onClick={navigate} />
           <NavItem icon={"\u25A3"} label="Command Center" route="command" active={route} onClick={navigate} />
+          <NavItem icon={"\u25CE"} label="Awareness" route="awareness" active={route} onClick={navigate} />
           <NavItem icon={"\u2666"} label="Authority" route="authority" active={route} onClick={navigate} />
           <NavItem icon={"\u2699"} label="Settings" route="settings" active={route} onClick={navigate} />
         </div>
 
         {/* Status */}
-        <div style={{
-          padding: "12px 16px",
-          borderTop: "1px solid var(--j-border)",
-          fontSize: "11px",
-          color: "var(--j-text-muted)",
-        }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-            <span style={{
-              width: "6px",
-              height: "6px",
-              borderRadius: "50%",
-              background: "var(--j-success)",
-              display: "inline-block",
-            }} />
-            System Online
-          </div>
-        </div>
+        <AwarenessStatusBar isConnected={ws.isConnected} />
       </nav>
 
       {/* Main Content */}
@@ -154,6 +140,7 @@ export function App() {
           {route === "office" && <OfficePage agentActivity={ws.agentActivity} />}
           {route === "knowledge" && <KnowledgePage />}
           {route === "command" && <CommandPage />}
+          {route === "awareness" && <AwarenessPage />}
           {route === "authority" && <AuthorityPage />}
           {route === "settings" && <SettingsPage />}
         </React.Suspense>
@@ -206,5 +193,66 @@ function NavItem({ icon, label, route, active, onClick }: {
       <span style={{ fontSize: "14px", width: "20px", textAlign: "center" }}>{icon}</span>
       {label}
     </button>
+  );
+}
+
+function AwarenessStatusBar({ isConnected }: { isConnected: boolean }) {
+  const [status, setStatus] = useState<{ running: boolean; appName?: string; captureCount?: number } | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    const poll = async () => {
+      try {
+        const resp = await fetch("/api/awareness/status");
+        if (resp.ok && mounted) {
+          const data = await resp.json();
+          setStatus({
+            running: data.running,
+            appName: data.liveContext?.currentApp,
+            captureCount: data.liveContext?.captureCount,
+          });
+        }
+      } catch { /* ignore */ }
+    };
+    poll();
+    const interval = setInterval(poll, 10000);
+    return () => { mounted = false; clearInterval(interval); };
+  }, []);
+
+  const dotColor = !isConnected
+    ? "var(--j-text-muted)"
+    : status?.running
+    ? "var(--j-success)"
+    : "var(--j-warning, #f59e0b)";
+
+  const label = !isConnected
+    ? "Disconnected"
+    : status?.running
+    ? status.appName
+      ? `Watching: ${status.appName}`
+      : "Awareness Active"
+    : "System Online";
+
+  return (
+    <div style={{
+      padding: "12px 16px",
+      borderTop: "1px solid var(--j-border)",
+      fontSize: "11px",
+      color: "var(--j-text-muted)",
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+        <span style={{
+          width: "6px",
+          height: "6px",
+          borderRadius: "50%",
+          background: dotColor,
+          display: "inline-block",
+          boxShadow: status?.running ? `0 0 6px ${dotColor}` : "none",
+        }} />
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {label}
+        </span>
+      </div>
+    </div>
   );
 }

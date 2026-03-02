@@ -111,6 +111,13 @@ function formatEventType(type: string): string {
     case 'browser': return 'Browser Activity';
     case 'commitment_overdue': return 'Overdue Commitments';
     case 'commitment_due_soon': return 'Upcoming Commitments';
+    case 'screen_capture': return 'Screen Captures';
+    case 'context_changed': return 'Context Switches';
+    case 'error_detected': return 'Screen Errors';
+    case 'stuck_detected': return 'Stuck Detection';
+    case 'session_started': return 'Sessions Started';
+    case 'session_ended': return 'Sessions Ended';
+    case 'suggestion_ready': return 'Awareness Suggestions';
     default: return type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
   }
 }

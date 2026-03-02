@@ -19,7 +19,7 @@ import { WebSocketService } from "./ws-service.ts";
 import { EventReactor } from "./event-reactor.ts";
 import { EventCoalescer } from "./event-coalescer.ts";
 import { CommitmentExecutor } from "./commitment-executor.ts";
-import { checkCommitments } from "./event-classifier.ts";
+import { checkCommitments, classifyEvent } from "./event-classifier.ts";
 import { createApiRoutes } from "./api-routes.ts";
 import { GoogleAuth } from "../integrations/google-auth.ts";
 import { ResearchQueue } from "./research-queue.ts";
@@ -33,6 +33,7 @@ import { AuthorityLearner } from "../authority/learning.ts";
 import { EmergencyController } from "../authority/emergency.ts";
 import { ApprovalDelivery } from "../authority/approval-delivery.ts";
 import { DeferredExecutor } from "../authority/deferred-executor.ts";
+import { sendDesktopNotification } from "../comms/desktop-notify.ts";
 
 // Constants
 const DEFAULT_PORT = 3142;  // JARVIS port
@@ -51,6 +52,7 @@ let healthMonitor: HealthMonitor | null = null;
 let heartbeatTimer: Timer | null = null;
 let commitmentExecutor: CommitmentExecutor | null = null;
 let bgAgent: BackgroundAgentService | null = null;
+let awarenessService: import('../awareness/service.ts').AwarenessService | null = null;
 
 /**
  * Parse command line arguments
@@ -140,6 +142,12 @@ async function handleShutdown(signal: string): Promise<void> {
     if (commitmentExecutor) {
       commitmentExecutor.stop();
       commitmentExecutor = null;
+    }
+
+    // Stop awareness service
+    if (awarenessService) {
+      await awarenessService.stop();
+      awarenessService = null;
     }
 
     // Stop background agent (separate browser)
@@ -397,7 +405,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     console.log(`[Daemon] Authority engine initialized (governed: ${authorityEngine.getConfig().governed_categories.join(', ')})`);
 
     // 9. Set up API routes + dashboard static files
-    const apiRoutes = createApiRoutes({
+    const apiContext = {
       healthMonitor,
       agentService,
       config: jarvisConfig,
@@ -409,7 +417,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       learner,
       emergencyController,
       deferredExecutor,
-    });
+      awarenessService: null as import('../awareness/service.ts').AwarenessService | null,
+    };
+    const apiRoutes = createApiRoutes(apiContext);
     wsService.setApiRoutes(apiRoutes);
 
     // Serve pre-built dashboard from ui/dist/
@@ -452,6 +462,180 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     wsService.setCommitmentExecutor(executor);
     executor.start();
     commitmentExecutor = executor;
+
+    // 10e. Create and start Awareness Service (M13)
+    if (jarvisConfig.awareness?.enabled !== false) {
+      try {
+        const { AwarenessService } = await import('../awareness/service.ts');
+        const { DesktopController } = await import('../actions/app-control/desktop-controller.ts');
+        const awarenessDesktop = new DesktopController(jarvisConfig.desktop?.sidecar_port ?? 9224);
+        const svc = new AwarenessService(
+          jarvisConfig,
+          agentService.getLLMManager(),
+          awarenessDesktop,
+          (event) => {
+            // Route awareness events through existing event pipeline
+            const classified = classifyEvent({
+              type: event.type,
+              data: event.data,
+              timestamp: event.timestamp,
+            });
+            if (classified.priority === 'critical' || classified.priority === 'high') {
+              reactor.react(classified).catch(err =>
+                console.error('[Daemon] Awareness reaction error:', err)
+              );
+            } else {
+              coalescer.addEvent(classified);
+            }
+            // Broadcast to WebSocket clients
+            wsService.broadcastAwarenessEvent(event);
+
+            // Push suggestions as chat notifications + voice + desktop
+            if (event.type === 'suggestion_ready') {
+              const title = String(event.data.title ?? '');
+              const body = String(event.data.body ?? '');
+              const text = `**${title}**\n${body}`;
+              console.log(`[Daemon] Awareness suggestion firing: "${title}"`);
+
+              const hasWsClients = wsService.getServer().getClientCount() > 0;
+
+              if (hasWsClients) {
+                // Primary: deliver via WebSocket + voice
+                wsService.broadcastNotification(text, 'urgent');
+                sendDesktopNotification(`JARVIS: ${title}`, body, { urgency: 'normal' });
+                wsService.broadcastProactiveVoice(body).catch(err =>
+                  console.error('[Daemon] Awareness TTS error:', err)
+                );
+              } else {
+                // Fallback: no dashboard clients — deliver via external channels + persistent desktop
+                console.log('[Daemon] No WS clients — routing suggestion to external channels');
+                channelService.broadcastToAll(text).catch(err =>
+                  console.error('[Daemon] Channel broadcast error:', err)
+                );
+                sendDesktopNotification(`JARVIS: ${title}`, body, { urgency: 'critical', expireMs: 30000 });
+              }
+            }
+
+            // Auto-research errors: silently investigate and deliver solution
+            if (event.type === 'error_detected' && bgAgent) {
+              const errorText = String(event.data.errorText ?? '');
+              const appName = String(event.data.appName ?? '');
+              if (errorText.length > 5) {
+                console.log(`[Daemon] Auto-researching error: "${errorText.slice(0, 80)}"`);
+                bgAgent.handleMessage(
+                  `The user is seeing this error in ${appName}: "${errorText}". ` +
+                  `Search the web and vault for a solution. Be concise and actionable. ` +
+                  `Start your response with the fix, not a question.`,
+                  'awareness'
+                ).then(solution => {
+                  if (solution && solution.length > 10) {
+                    const solutionText = `**Fix for error in ${appName}:**\n${solution.slice(0, 500)}`;
+                    wsService.broadcastNotification(solutionText, 'urgent');
+                    sendDesktopNotification(`JARVIS: Fix for ${appName}`, solution.slice(0, 200), { urgency: 'critical', expireMs: 15000 });
+                    // Strip markdown for TTS — voice should sound natural
+                    const voiceText = solution
+                      .replace(/#{1,6}\s*/g, '')
+                      .replace(/\*{1,2}([^*]+)\*{1,2}/g, '$1')
+                      .replace(/`([^`]+)`/g, '$1')
+                      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+                      .replace(/\n{2,}/g, '. ')
+                      .replace(/\n/g, ' ')
+                      .replace(/\s{2,}/g, ' ')
+                      .trim()
+                      .slice(0, 300);
+                    console.log(`[Daemon] Speaking error solution (${voiceText.length} chars): "${voiceText.slice(0, 80)}..."`);
+                    wsService.broadcastProactiveVoice(
+                      `I found a fix for the error in ${appName}. ${voiceText}`
+                    ).then(() =>
+                      console.log('[Daemon] Error solution TTS delivered')
+                    ).catch(err =>
+                      console.error('[Daemon] Error solution TTS failed:', err instanceof Error ? err.message : err)
+                    );
+                  }
+                }).catch(err =>
+                  console.error('[Daemon] Error auto-research failed:', err instanceof Error ? err.message : err)
+                );
+              }
+            }
+
+            // Deep-research struggles: for high-confidence code/terminal struggles
+            if (event.type === 'struggle_detected' && bgAgent) {
+              const appCategory = String(event.data.appCategory ?? 'general');
+              const sAppName = String(event.data.appName ?? '');
+              const ocrPreview = String(event.data.ocrPreview ?? '');
+              const compositeScore = event.data.compositeScore as number;
+
+              if (compositeScore >= 0.7 && (appCategory === 'code_editor' || appCategory === 'terminal')) {
+                console.log(`[Daemon] Deep-researching struggle in ${sAppName} (score: ${compositeScore.toFixed(2)})`);
+                bgAgent.handleMessage(
+                  `The user has been struggling in ${sAppName} (${appCategory}) for several minutes. ` +
+                  `Here's what's on their screen:\n"${ocrPreview.slice(0, 800)}"\n\n` +
+                  `Search for solutions to any errors visible. Check documentation for the relevant language/framework. ` +
+                  `Provide a specific, actionable fix. Start with the solution, not a question.`,
+                  'awareness'
+                ).then(solution => {
+                  if (solution && solution.length > 10) {
+                    const solutionText = `**Help for ${sAppName}:**\n${solution.slice(0, 500)}`;
+                    wsService.broadcastNotification(solutionText, 'urgent');
+                    sendDesktopNotification(`JARVIS: Help for ${sAppName}`, solution.slice(0, 200), { urgency: 'critical', expireMs: 15000 });
+                    const voiceText = solution
+                      .replace(/#{1,6}\s*/g, '')
+                      .replace(/\*{1,2}([^*]+)\*{1,2}/g, '$1')
+                      .replace(/`([^`]+)`/g, '$1')
+                      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+                      .replace(/\n{2,}/g, '. ')
+                      .replace(/\n/g, ' ')
+                      .replace(/\s{2,}/g, ' ')
+                      .trim()
+                      .slice(0, 300);
+                    wsService.broadcastProactiveVoice(
+                      `I found something that might help with what you're working on in ${sAppName}. ${voiceText}`
+                    ).catch(err =>
+                      console.error('[Daemon] Struggle solution TTS failed:', err instanceof Error ? err.message : err)
+                    );
+                  }
+                }).catch(err =>
+                  console.error('[Daemon] Struggle auto-research failed:', err instanceof Error ? err.message : err)
+                );
+              }
+            }
+          },
+          googleAuth
+        );
+        await svc.start();
+        awarenessService = svc;
+        apiContext.awarenessService = svc;
+        console.log('[Daemon] Awareness service started (screen capture + OCR + context tracking)');
+
+        // Auto-launch overlay widget (non-blocking, best-effort)
+        if (jarvisConfig.awareness?.overlay_autolaunch !== false) {
+          try {
+            const overlayUrl = `http://localhost:${config.port}/overlay`;
+            const browsers = ['chromium-browser', 'chromium', 'google-chrome', 'google-chrome-stable'];
+            for (const browser of browsers) {
+              const which = Bun.spawnSync(['which', browser]);
+              if (which.exitCode === 0) {
+                Bun.spawn([
+                  browser,
+                  `--app=${overlayUrl}`,
+                  '--window-size=300,320',
+                  '--window-position=20,20',
+                  '--no-sandbox',
+                  '--disable-extensions',
+                  '--disable-gpu',
+                  `--user-data-dir=${path.join(config.dataDir, 'browser', 'overlay-profile')}`,
+                ], { stdout: 'ignore', stderr: 'ignore' });
+                console.log(`[Daemon] Awareness overlay launched (${browser})`);
+                break;
+              }
+            }
+          } catch { /* overlay launch is best-effort */ }
+        }
+      } catch (err) {
+        console.error('[Daemon] Awareness service failed to start:', err instanceof Error ? err.message : err);
+        // Non-fatal — daemon continues without awareness
+      }
+    }
 
     // 11. Start health monitoring
     healthMonitor.start(config.healthCheckInterval);

@@ -48,6 +48,14 @@ function mapEventType(eventType: string): ObservationType {
       return 'email';
     case 'browser':
       return 'browser';
+    case 'screen_capture':
+    case 'context_changed':
+    case 'error_detected':
+    case 'stuck_detected':
+    case 'session_started':
+    case 'session_ended':
+    case 'suggestion_ready':
+      return 'screen_capture';
     default:
       return 'app_activity';
   }

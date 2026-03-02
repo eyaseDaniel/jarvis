@@ -306,6 +306,79 @@ export class WebSocketService implements Service {
   /**
    * Broadcast an approval resolution (approved/denied/executed) to all clients.
    */
+  /**
+   * Broadcast an awareness event to all connected clients.
+   */
+  broadcastAwarenessEvent(event: { type: string; data: Record<string, unknown>; timestamp: number }): void {
+    const message: WSMessage = {
+      type: 'notification',
+      payload: {
+        source: 'awareness_event',
+        event,
+      },
+      timestamp: event.timestamp,
+    };
+    this.wsServer.broadcast(message);
+  }
+
+  /**
+   * Synthesize TTS for a proactive message and broadcast audio to all clients.
+   * Used for awareness suggestions and other unsolicited voice notifications.
+   */
+  /**
+   * Synthesize TTS for a proactive message and broadcast audio to all clients.
+   * Used for awareness suggestions and other unsolicited voice notifications.
+   */
+  async broadcastProactiveVoice(text: string): Promise<void> {
+    if (!this.ttsProvider || !text) {
+      console.log(`[WSService] Proactive TTS skipped: ${!this.ttsProvider ? 'no TTS provider' : 'empty text'}`);
+      return;
+    }
+
+    if (this.wsServer.getClientCount() === 0) {
+      console.log('[WSService] Proactive TTS skipped: no connected clients');
+      return;
+    }
+
+    try {
+      const requestId = `proactive-${Date.now()}`;
+
+      // Signal TTS start to all clients
+      const startMsg: WSMessage = {
+        type: 'tts_start',
+        payload: { requestId },
+        timestamp: Date.now(),
+      };
+      this.wsServer.broadcast(startMsg);
+
+      let chunkCount = 0;
+      for await (const chunk of this.ttsProvider.synthesizeStream(text)) {
+        // Send binary audio to all connected clients
+        for (const ws of this.wsServer.getClients()) {
+          try {
+            ws.sendBinary(chunk);
+          } catch { /* client may have disconnected */ }
+        }
+        chunkCount++;
+      }
+
+      // Signal TTS end
+      const endMsg: WSMessage = {
+        type: 'tts_end',
+        payload: { requestId },
+        timestamp: Date.now(),
+      };
+      this.wsServer.broadcast(endMsg);
+      console.log(`[WSService] Proactive TTS complete: "${text.slice(0, 60)}..." (${chunkCount} chunks)`);
+    } catch (err) {
+      console.error('[WSService] Proactive TTS error:', err instanceof Error ? err.message : err);
+      // Still send tts_end so client doesn't get stuck
+      try {
+        this.wsServer.broadcast({ type: 'tts_end', payload: {}, timestamp: Date.now() });
+      } catch { /* ignore */ }
+    }
+  }
+
   broadcastApprovalUpdate(request: ApprovalRequest): void {
     const message: WSMessage = {
       type: 'notification',

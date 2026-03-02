@@ -321,6 +321,14 @@ export function useWebSocket() {
           timestamp: msg.timestamp,
         };
         setContentEvents((prev) => [...prev, event]);
+      } else if (payload.source === "awareness_event") {
+        // Awareness events (context changes, suggestions, etc.)
+        const awarenessEvent = payload.event as { type: string; data: Record<string, unknown> };
+        if (awarenessEvent?.type === "suggestion_ready") {
+          // Suggestion events also arrive via broadcastNotification as chat messages,
+          // so no need to duplicate here — just log for debugging
+          console.log("[WS] Awareness suggestion:", awarenessEvent.data.title);
+        }
       }
     } else if (msg.type === "error") {
       setMessages((prev) => [

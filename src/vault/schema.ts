@@ -396,4 +396,69 @@ function createTables(db: Database): void {
       UNIQUE(action_category, tool_name)
     )
   `);
+
+  // ── Awareness (M13): Screen captures, sessions, suggestions ──
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS screen_captures (
+      id TEXT PRIMARY KEY,
+      timestamp INTEGER NOT NULL,
+      session_id TEXT,
+      image_path TEXT,
+      thumbnail_path TEXT,
+      pixel_change_pct REAL,
+      ocr_text TEXT,
+      app_name TEXT,
+      window_title TEXT,
+      url TEXT,
+      file_path TEXT,
+      retention_tier TEXT NOT NULL DEFAULT 'full'
+        CHECK(retention_tier IN ('full', 'key_moment', 'metadata_only')),
+      created_at INTEGER NOT NULL
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_captures_timestamp ON screen_captures(timestamp)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_captures_session ON screen_captures(session_id)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_captures_retention ON screen_captures(retention_tier)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_captures_app ON screen_captures(app_name)`);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS awareness_sessions (
+      id TEXT PRIMARY KEY,
+      started_at INTEGER NOT NULL,
+      ended_at INTEGER,
+      topic TEXT,
+      apps TEXT,
+      project_context TEXT,
+      action_types TEXT,
+      entity_links TEXT,
+      summary TEXT,
+      capture_count INTEGER DEFAULT 0,
+      created_at INTEGER NOT NULL
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_started ON awareness_sessions(started_at)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_topic ON awareness_sessions(topic)`);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS awareness_suggestions (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL CHECK(type IN ('error', 'stuck', 'automation', 'knowledge', 'schedule', 'break', 'general')),
+      trigger_capture_id TEXT,
+      title TEXT NOT NULL,
+      body TEXT NOT NULL,
+      context TEXT,
+      delivered INTEGER DEFAULT 0,
+      delivered_at INTEGER,
+      delivery_channel TEXT,
+      dismissed INTEGER DEFAULT 0,
+      acted_on INTEGER DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      CHECK(delivered IN (0, 1)),
+      CHECK(dismissed IN (0, 1)),
+      CHECK(acted_on IN (0, 1))
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_suggestions_type ON awareness_suggestions(type)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_suggestions_created ON awareness_suggestions(created_at)`);
 }

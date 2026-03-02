@@ -8,7 +8,8 @@ export type ObservationType =
   | 'calendar'
   | 'email'
   | 'browser'
-  | 'process';
+  | 'process'
+  | 'screen_capture';
 
 export type Observation = {
   id: string;

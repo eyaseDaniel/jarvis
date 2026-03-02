@@ -136,6 +136,37 @@ export function classifyEvent(event: ObserverEvent): ClassifiedEvent {
     return { event, priority: 'normal', reason: `New email: ${subject || 'no subject'}` };
   }
 
+  // --- Awareness events (M13) ---
+  if (type === 'error_detected') {
+    return { event, priority: 'high', reason: `Screen error detected: ${data.errorText} in ${data.appName}` };
+  }
+
+  if (type === 'struggle_detected') {
+    const score = data.compositeScore as number;
+    const priority = score >= 0.7 ? 'high' : 'normal';
+    return { event, priority, reason: `User struggling in ${data.appName} (score: ${score?.toFixed(2)}, ${data.appCategory})` };
+  }
+
+  if (type === 'stuck_detected') {
+    return { event, priority: 'normal', reason: `User appears stuck in ${data.appName} (${Math.round((data.durationMs as number) / 1000)}s)` };
+  }
+
+  if (type === 'context_changed') {
+    return { event, priority: 'low', reason: `Switched from ${data.fromApp} to ${data.toApp}` };
+  }
+
+  if (type === 'session_started' || type === 'session_ended') {
+    return { event, priority: 'low', reason: `Activity session ${type === 'session_started' ? 'started' : 'ended'}` };
+  }
+
+  if (type === 'suggestion_ready') {
+    return { event, priority: 'normal', reason: `Awareness suggestion: ${data.title}` };
+  }
+
+  if (type === 'screen_capture') {
+    return { event, priority: 'low', reason: `Screen captured (${Math.round((data.pixelChangePct as number) * 100)}% change)` };
+  }
+
   // --- Default ---
   return { event, priority: 'low', reason: `Unclassified event: ${type}` };
 }

@@ -58,6 +58,10 @@ export function useVoice({ wsRef, wakeWordEnabled = true }: UseVoiceOptions): Us
     if (!audioContextRef.current || audioContextRef.current.state === "closed") {
       audioContextRef.current = new AudioContext();
     }
+    // Resume if suspended (browser autoplay policy)
+    if (audioContextRef.current.state === "suspended") {
+      audioContextRef.current.resume().catch(() => {});
+    }
     return audioContextRef.current;
   }, []);
 
@@ -184,6 +188,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true }: UseVoiceOptions): Us
   }, [playNextTTSChunk]);
 
   const handleTTSStart = useCallback((requestId: string) => {
+    console.log("[Voice] TTS start:", requestId);
     // Stop any lingering playback from a previous TTS session
     if (ttsPlayingRef.current || ttsQueueRef.current.length > 0) {
       audioContextRef.current?.close();
@@ -194,7 +199,9 @@ export function useVoice({ wsRef, wakeWordEnabled = true }: UseVoiceOptions): Us
     ttsPlayingRef.current = false;
     setVoiceState("speaking");
     setTtsAudioPlaying(true);
-  }, []);
+    // Pre-warm AudioContext so it's ready for binary chunks
+    getAudioContext();
+  }, [getAudioContext]);
 
   const handleTTSEnd = useCallback(() => {
     ttsRequestIdRef.current = null;
