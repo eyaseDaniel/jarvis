@@ -122,10 +122,15 @@ export async function runOnboard(): Promise<void> {
       }
 
       manager.setPrimary(provider);
-      const resp = await manager.chat(
-        [{ role: 'user', content: 'Say "JARVIS online" in 3 words.' }],
-        { max_tokens: 20 },
-      );
+      const resp = await Promise.race([
+        manager.chat(
+          [{ role: 'user', content: 'Say "JARVIS online" in 3 words.' }],
+          { max_tokens: 20 },
+        ),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Connection timed out (15s)')), 15_000),
+        ),
+      ]);
       spin.stop(`Connected! Model: ${resp.model}`);
     } catch (err) {
       spin.stop();

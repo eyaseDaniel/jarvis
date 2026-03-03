@@ -18,10 +18,12 @@ const LOG_PATH = join(LOG_DIR, 'jarvis.log');
  * Write the current daemon PID to the PID file.
  */
 export function writePid(pid: number): void {
-  if (!existsSync(JARVIS_DIR)) {
-    mkdirSync(JARVIS_DIR, { recursive: true });
+  try {
+    mkdirSync(JARVIS_DIR, { recursive: true }); // idempotent, no race
+    writeFileSync(PID_PATH, String(pid), 'utf-8');
+  } catch (err) {
+    console.error(`[PID] Failed to write PID file: ${err}`);
   }
-  writeFileSync(PID_PATH, String(pid), 'utf-8');
 }
 
 /**
@@ -32,7 +34,8 @@ export function readPid(): number | null {
   try {
     const content = readFileSync(PID_PATH, 'utf-8').trim();
     const pid = parseInt(content, 10);
-    return isNaN(pid) ? null : pid;
+    if (isNaN(pid) || pid <= 0) return null;
+    return pid;
   } catch {
     return null;
   }
@@ -46,8 +49,9 @@ export function clearPid(): void {
     if (existsSync(PID_PATH)) {
       unlinkSync(PID_PATH);
     }
-  } catch {
-    // Ignore errors (file may already be gone)
+  } catch (err) {
+    // Log but don't crash — file may already be gone or permissions issue
+    console.warn(`[PID] Could not remove PID file: ${err}`);
   }
 }
 
@@ -82,9 +86,7 @@ export function getPidPath(): string {
  * Get the log file path. Creates the log directory if needed.
  */
 export function getLogPath(): string {
-  if (!existsSync(LOG_DIR)) {
-    mkdirSync(LOG_DIR, { recursive: true });
-  }
+  mkdirSync(LOG_DIR, { recursive: true }); // idempotent
   return LOG_PATH;
 }
 

@@ -409,63 +409,71 @@ export async function setupGoogleOAuth(config: any): Promise<boolean> {
     // User can open manually
   }
 
-  // Start temporary callback server
+  // Start temporary callback server for OAuth redirect
   printInfo('Waiting for authorization callback on port 3142...');
 
   return new Promise<boolean>((resolve) => {
+    let server: ReturnType<typeof Bun.serve>;
+    try {
+      server = Bun.serve({
+        port: 3142,
+        async fetch(req) {
+          const url = new URL(req.url);
+
+          if (url.pathname === '/api/auth/google/callback') {
+            const code = url.searchParams.get('code');
+            const error = url.searchParams.get('error');
+
+            if (error) {
+              clearTimeout(timeout);
+              printErr(`Authorization denied: ${error}`);
+              setTimeout(() => { server.stop(); resolve(false); }, 300);
+              return new Response(
+                '<html><body><h1>Authorization Denied</h1><p>You can close this tab.</p></body></html>',
+                { headers: { 'Content-Type': 'text/html' } }
+              );
+            }
+
+            if (!code) {
+              return new Response('Missing code', { status: 400 });
+            }
+
+            try {
+              await auth.exchangeCode(code);
+              clearTimeout(timeout);
+              printOk('Google OAuth configured! Tokens saved.');
+              setTimeout(() => { server.stop(); resolve(true); }, 300);
+              return new Response(
+                '<html><body><h1>JARVIS Google Authorization Complete!</h1><p>You can close this tab.</p></body></html>',
+                { headers: { 'Content-Type': 'text/html' } }
+              );
+            } catch (err) {
+              clearTimeout(timeout);
+              printErr(`Token exchange failed: ${err}`);
+              setTimeout(() => { server.stop(); resolve(false); }, 300);
+              return new Response(
+                `<html><body><h1>Token Exchange Failed</h1><pre>${err}</pre></body></html>`,
+                { headers: { 'Content-Type': 'text/html' }, status: 500 }
+              );
+            }
+          }
+
+          return new Response('Not found', { status: 404 });
+        },
+      });
+    } catch (err) {
+      printErr(`Could not start OAuth callback server on port 3142 (port in use?)`);
+      printInfo('Stop the JARVIS daemon first, or run later with: bun run setup:google');
+      resolve(false);
+      return;
+    }
+
     const timeout = setTimeout(() => {
       server.stop();
       printWarn('Timeout waiting for Google authorization (60s).');
       printInfo('Run later with: bun run setup:google');
       resolve(false);
     }, 60_000);
-
-    const server = Bun.serve({
-      port: 3142,
-      async fetch(req) {
-        const url = new URL(req.url);
-
-        if (url.pathname === '/api/auth/google/callback') {
-          const code = url.searchParams.get('code');
-          const error = url.searchParams.get('error');
-
-          if (error) {
-            clearTimeout(timeout);
-            printErr(`Authorization denied: ${error}`);
-            setTimeout(() => { server.stop(); resolve(false); }, 300);
-            return new Response(
-              '<html><body><h1>Authorization Denied</h1><p>You can close this tab.</p></body></html>',
-              { headers: { 'Content-Type': 'text/html' } }
-            );
-          }
-
-          if (!code) {
-            return new Response('Missing code', { status: 400 });
-          }
-
-          try {
-            await auth.exchangeCode(code);
-            clearTimeout(timeout);
-            printOk('Google OAuth configured! Tokens saved.');
-            setTimeout(() => { server.stop(); resolve(true); }, 300);
-            return new Response(
-              '<html><body><h1>JARVIS Google Authorization Complete!</h1><p>You can close this tab.</p></body></html>',
-              { headers: { 'Content-Type': 'text/html' } }
-            );
-          } catch (err) {
-            clearTimeout(timeout);
-            printErr(`Token exchange failed: ${err}`);
-            setTimeout(() => { server.stop(); resolve(false); }, 300);
-            return new Response(
-              `<html><body><h1>Token Exchange Failed</h1><pre>${err}</pre></body></html>`,
-              { headers: { 'Content-Type': 'text/html' }, status: 500 }
-            );
-          }
-        }
-
-        return new Response('Not found', { status: 404 });
-      },
-    });
   });
 }
 

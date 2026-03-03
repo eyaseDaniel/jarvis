@@ -61,31 +61,77 @@ detect_os() {
   esac
 }
 
+# ── Package install helper (handles sudo vs root) ────────────────────
+
+pkg_install() {
+  local packages=("$@")
+  if command -v apt-get &> /dev/null; then
+    if [ "$(id -u)" -eq 0 ]; then
+      apt-get update -qq && apt-get install -y -qq "${packages[@]}" >/dev/null 2>&1
+    else
+      sudo apt-get update -qq && sudo apt-get install -y -qq "${packages[@]}" >/dev/null 2>&1
+    fi
+  elif command -v yum &> /dev/null; then
+    if [ "$(id -u)" -eq 0 ]; then
+      yum install -y -q "${packages[@]}" >/dev/null 2>&1
+    else
+      sudo yum install -y -q "${packages[@]}" >/dev/null 2>&1
+    fi
+  elif command -v pacman &> /dev/null; then
+    if [ "$(id -u)" -eq 0 ]; then
+      pacman -Sy --noconfirm "${packages[@]}" >/dev/null 2>&1
+    else
+      sudo pacman -Sy --noconfirm "${packages[@]}" >/dev/null 2>&1
+    fi
+  elif command -v apk &> /dev/null; then
+    if [ "$(id -u)" -eq 0 ]; then
+      apk add --quiet "${packages[@]}" >/dev/null 2>&1
+    else
+      sudo apk add --quiet "${packages[@]}" >/dev/null 2>&1
+    fi
+  elif command -v brew &> /dev/null; then
+    brew install "${packages[@]}" 2>/dev/null
+  else
+    return 1
+  fi
+}
+
 # ── Ensure PATH includes bun global bin ──────────────────────────────
 
 ensure_bun_path() {
-  BUN_BIN="$HOME/.bun/bin"
-  if [[ ":$PATH:" != *":$BUN_BIN:"* ]]; then
-    export PATH="$BUN_BIN:$PATH"
+  local bun_bin="$HOME/.bun/bin"
+  if [[ ":$PATH:" != *":$bun_bin:"* ]]; then
+    export PATH="$bun_bin:$PATH"
   fi
 }
 
 add_path_to_shell() {
-  BUN_BIN="$HOME/.bun/bin"
-  SHELL_NAME=$(basename "$SHELL")
+  local bun_bin="$HOME/.bun/bin"
+  local shell_name
+  shell_name=$(basename "$SHELL")
+  local profile
 
-  case "$SHELL_NAME" in
-    zsh)  PROFILE="$HOME/.zshrc" ;;
-    bash) PROFILE="$HOME/.bashrc" ;;
-    fish) PROFILE="$HOME/.config/fish/config.fish" ;;
-    *)    PROFILE="$HOME/.profile" ;;
+  case "$shell_name" in
+    zsh)  profile="$HOME/.zshrc" ;;
+    bash) profile="$HOME/.bashrc" ;;
+    fish) profile="$HOME/.config/fish/config.fish" ;;
+    *)    profile="$HOME/.profile" ;;
   esac
 
-  if ! grep -q "\.bun/bin" "$PROFILE" 2>/dev/null; then
-    echo "" >> "$PROFILE"
-    echo "# Bun global bin (added by JARVIS installer)" >> "$PROFILE"
-    echo "export PATH=\"\$HOME/.bun/bin:\$PATH\"" >> "$PROFILE"
-    info "Added bun bin to ${PROFILE}"
+  # Ensure parent directory exists (e.g. ~/.config/fish/)
+  mkdir -p "$(dirname "$profile")"
+
+  if ! grep -q "\.bun/bin" "$profile" 2>/dev/null; then
+    if [ "$shell_name" = "fish" ]; then
+      echo "" >> "$profile"
+      echo "# Bun global bin (added by JARVIS installer)" >> "$profile"
+      echo "set -gx PATH \$HOME/.bun/bin \$PATH" >> "$profile"
+    else
+      echo "" >> "$profile"
+      echo "# Bun global bin (added by JARVIS installer)" >> "$profile"
+      echo "export PATH=\"\$HOME/.bun/bin:\$PATH\"" >> "$profile"
+    fi
+    info "Added bun bin to ${profile}"
   fi
 }
 
@@ -103,6 +149,19 @@ main() {
     exit 1
   fi
 
+  # ── Step 0: Check prerequisites (curl) ──────────────────────────
+
+  if ! command -v curl &> /dev/null; then
+    info "curl not found. Installing..."
+    if pkg_install curl; then
+      ok "curl installed"
+    else
+      err "curl is required but could not be installed automatically."
+      err "Please install curl manually and re-run the installer."
+      exit 1
+    fi
+  fi
+
   # ── Step 1: Check / Install Bun ──────────────────────────────────
 
   echo -e "${CYAN}[1/4]${RESET} ${BOLD}Checking Bun runtime...${RESET}"
@@ -114,26 +173,11 @@ main() {
     # Bun's installer requires unzip — ensure it's available
     if ! command -v unzip &> /dev/null; then
       info "Installing unzip (required by Bun)..."
-      if command -v apt-get &> /dev/null; then
-        sudo apt-get update -qq && sudo apt-get install -y -qq unzip >/dev/null 2>&1
-      elif command -v yum &> /dev/null; then
-        sudo yum install -y -q unzip >/dev/null 2>&1
-      elif command -v pacman &> /dev/null; then
-        sudo pacman -Sy --noconfirm unzip >/dev/null 2>&1
-      elif command -v apk &> /dev/null; then
-        sudo apk add --quiet unzip >/dev/null 2>&1
-      elif command -v brew &> /dev/null; then
-        brew install unzip 2>/dev/null
+      if pkg_install unzip; then
+        ok "unzip installed"
       else
         err "unzip is required but could not be installed automatically."
         err "Please install unzip manually and re-run the installer."
-        exit 1
-      fi
-
-      if command -v unzip &> /dev/null; then
-        ok "unzip installed"
-      else
-        err "Failed to install unzip. Please install it manually and re-run."
         exit 1
       fi
     fi
@@ -158,14 +202,27 @@ main() {
 
   echo -e "${CYAN}[2/4]${RESET} ${BOLD}Downloading J.A.R.V.I.S...${RESET}"
 
+  if ! command -v git &> /dev/null; then
+    info "git not found. Installing..."
+    if pkg_install git; then
+      ok "git installed"
+    else
+      err "git is required but could not be installed automatically."
+      err "Please install git manually and re-run the installer."
+      exit 1
+    fi
+  fi
+
   if [ -d "$INSTALL_DIR/.git" ]; then
     info "Existing installation found. Updating..."
-    # Reset any local modifications (e.g. corrupted files from previous installs)
     git -C "$INSTALL_DIR" checkout -- . 2>/dev/null || true
     git -C "$INSTALL_DIR" pull --ff-only 2>/dev/null || {
       warn "Could not fast-forward. Re-cloning..."
       rm -rf "$INSTALL_DIR"
-      git clone --depth 1 "$REPO_URL" "$INSTALL_DIR"
+      git clone --depth 1 "$REPO_URL" "$INSTALL_DIR" || {
+        err "Failed to clone repository. Check your internet connection."
+        exit 1
+      }
     }
     ok "Updated to latest version"
   else
@@ -173,7 +230,10 @@ main() {
       rm -rf "$INSTALL_DIR"
     fi
     mkdir -p "$(dirname "$INSTALL_DIR")"
-    git clone --depth 1 "$REPO_URL" "$INSTALL_DIR"
+    git clone --depth 1 "$REPO_URL" "$INSTALL_DIR" || {
+      err "Failed to clone repository. Check your internet connection."
+      exit 1
+    }
     ok "Downloaded JARVIS"
   fi
 
@@ -183,16 +243,23 @@ main() {
 
   echo -e "${CYAN}[3/4]${RESET} ${BOLD}Installing dependencies...${RESET}"
 
-  cd "$INSTALL_DIR"
-  bun install --frozen-lockfile 2>/dev/null || bun install
+  cd "$INSTALL_DIR" || {
+    err "Failed to enter install directory: $INSTALL_DIR"
+    exit 1
+  }
+
+  if ! bun install --frozen-lockfile 2>/dev/null && ! bun install; then
+    err "Failed to install dependencies. Try running: cd $INSTALL_DIR && bun install"
+    exit 1
+  fi
   ok "Dependencies installed"
 
   # Create shell wrapper directly (avoids bun link registry lookups)
   rm -f "$HOME/.bun/bin/jarvis" 2>/dev/null || true
-  BUN_BIN="$HOME/.bun/bin"
-  mkdir -p "$BUN_BIN"
-  printf '#!/usr/bin/env bash\nexec bun "%s/bin/jarvis.ts" "$@"\n' "$INSTALL_DIR" > "$BUN_BIN/jarvis"
-  chmod +x "$BUN_BIN/jarvis"
+  local bun_bin="$HOME/.bun/bin"
+  mkdir -p "$bun_bin"
+  printf '#!/usr/bin/env bash\nexec bun "%s/bin/jarvis.ts" "$@"\n' "$INSTALL_DIR" > "$bun_bin/jarvis"
+  chmod +x "$bun_bin/jarvis"
 
   ensure_bun_path
   add_path_to_shell
@@ -212,7 +279,7 @@ main() {
   curl -sS -X POST "$TRACKING_URL" \
     -H "Content-Type: application/json" \
     -d "{\"os\":\"$OS\",\"bun_version\":\"$BUN_VER\"}" \
-    --max-time 3 &>/dev/null &
+    --connect-timeout 2 --max-time 3 &>/dev/null &
 
   # ── Step 4: Run Onboard Wizard ─────────────────────────────────
 
@@ -220,7 +287,9 @@ main() {
   echo ""
 
   ensure_bun_path
-  jarvis onboard
+  # Redirect stdin from /dev/tty so the interactive wizard works
+  # even when install.sh is piped (curl | bash)
+  jarvis onboard < /dev/tty
 }
 
 main "$@"

@@ -15,7 +15,7 @@
 import { join } from 'node:path';
 import { readFileSync } from 'node:fs';
 import { existsSync } from 'node:fs';
-import { writePid, readPid, clearPid, isRunning, getLogPath } from '../src/daemon/pid.ts';
+import { writePid, clearPid, isRunning, getLogPath } from '../src/daemon/pid.ts';
 import { c } from '../src/cli/helpers.ts';
 
 const PACKAGE_ROOT = join(import.meta.dir, '..');
@@ -78,9 +78,9 @@ async function cmdStart(args: string[]): Promise<void> {
   let port: number | undefined;
   const portIdx = args.indexOf('--port');
   if (portIdx !== -1 && args[portIdx + 1]) {
-    port = parseInt(args[portIdx + 1], 10);
-    if (isNaN(port)) {
-      console.error(c.red('Error: --port requires a number'));
+    port = parseInt(args[portIdx + 1]!, 10);
+    if (isNaN(port) || port < 1 || port > 65535) {
+      console.error(c.red('Error: --port requires a number between 1 and 65535'));
       process.exit(1);
     }
   }
@@ -122,10 +122,14 @@ async function cmdStart(args: string[]): Promise<void> {
       env: { ...process.env },
     });
 
-    // Wait briefly for the process to start
-    await new Promise(resolve => setTimeout(resolve, 1500));
+    // Poll for the daemon to write its PID (up to 10s)
+    let runningPid: number | null = null;
+    for (let i = 0; i < 20; i++) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      runningPid = isRunning();
+      if (runningPid) break;
+    }
 
-    const runningPid = isRunning();
     if (runningPid) {
       console.log(c.green(`✓ JARVIS daemon started (PID ${runningPid})`));
       console.log(c.dim(`  Dashboard: http://localhost:${port ?? 3142}`));
@@ -143,7 +147,7 @@ async function cmdStart(args: string[]): Promise<void> {
   }
 }
 
-function cmdStop(): void {
+async function cmdStop(): Promise<void> {
   const pid = isRunning();
   if (!pid) {
     console.log(c.yellow('JARVIS is not running.'));
@@ -153,6 +157,19 @@ function cmdStop(): void {
   console.log(c.cyan(`Stopping JARVIS daemon (PID ${pid})...`));
   try {
     process.kill(pid, 'SIGTERM');
+
+    // Wait up to 5s for graceful shutdown, then SIGKILL
+    let alive = true;
+    for (let i = 0; i < 10; i++) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      try { process.kill(pid, 0); } catch { alive = false; break; }
+    }
+
+    if (alive) {
+      console.log(c.dim('  Process still alive, sending SIGKILL...'));
+      try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+    }
+
     clearPid();
     console.log(c.green('✓ JARVIS daemon stopped.'));
   } catch (err) {
@@ -199,16 +216,7 @@ async function cmdDoctor(): Promise<void> {
 async function cmdRestart(args: string[]): Promise<void> {
   const pid = isRunning();
   if (pid) {
-    console.log(c.cyan(`Stopping JARVIS daemon (PID ${pid})...`));
-    try {
-      process.kill(pid, 'SIGTERM');
-      clearPid();
-    } catch {
-      clearPid();
-    }
-    // Wait for process to exit
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    console.log(c.green('✓ Stopped.'));
+    await cmdStop();
   }
 
   console.log('');
@@ -364,7 +372,7 @@ switch (command) {
     await cmdStart(commandArgs);
     break;
   case 'stop':
-    cmdStop();
+    await cmdStop();
     break;
   case 'restart':
     await cmdRestart(commandArgs);
