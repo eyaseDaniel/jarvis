@@ -6,7 +6,7 @@ type ConfigField = {
   label: string;
   required?: boolean;
   default?: unknown;
-  options?: string[];
+  options?: (string | { label: string; value: string })[];
   placeholder?: string;
   description?: string;
 };
@@ -156,9 +156,11 @@ function FieldEditor({
             style={inputStyle}
           >
             <option value="">— Select —</option>
-            {(field.options ?? []).map(opt => (
-              <option key={opt} value={opt}>{opt}</option>
-            ))}
+            {(field.options ?? []).map(opt => {
+              const val = typeof opt === 'string' ? opt : opt.value;
+              const lbl = typeof opt === 'string' ? opt : opt.label;
+              return <option key={val} value={val}>{lbl}</option>;
+            })}
           </select>
         );
 
