@@ -105,6 +105,13 @@ export type GoalEvent = {
   timestamp: number;
 };
 
+export type SiteEvent = {
+  type: string;
+  projectId: string;
+  data: Record<string, unknown>;
+  timestamp: number;
+};
+
 export function useWebSocket() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isConnected, setIsConnected] = useState(false);
@@ -113,6 +120,7 @@ export function useWebSocket() {
   const [agentActivity, setAgentActivity] = useState<AgentActivityEvent[]>([]);
   const [workflowEvents, setWorkflowEvents] = useState<WorkflowEvent[]>([]);
   const [goalEvents, setGoalEvents] = useState<GoalEvent[]>([]);
+  const [siteEvents, setSiteEvents] = useState<SiteEvent[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
   const streamBufferRef = useRef<string>("");
   const streamIdRef = useRef<string | null>(null);
@@ -344,6 +352,9 @@ export function useWebSocket() {
           },
         ]);
       }
+    } else if (msg.type === "site_event") {
+      const siteEvent = msg.payload as SiteEvent;
+      setSiteEvents((prev) => [...prev.slice(-100), siteEvent]);
     } else if (msg.type === "notification") {
       const payload = msg.payload as { source?: string; action?: string; task?: TaskEvent["task"]; item?: ContentEvent["item"]; event?: any };
       if (payload.source === "task_update" && payload.task && payload.action) {
@@ -397,7 +408,7 @@ export function useWebSocket() {
   }, [connect]);
 
   const sendMessage = useCallback(
-    (text: string) => {
+    (text: string, options?: { projectId?: string }) => {
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
 
       const id = crypto.randomUUID();
@@ -410,13 +421,17 @@ export function useWebSocket() {
           role: "user",
           content: text,
           timestamp: Date.now(),
+          source: options?.projectId ? `site:${options.projectId}` : undefined,
         },
       ]);
 
       // Send to server
       const msg: WSMessage = {
         type: "chat",
-        payload: { text },
+        payload: {
+          text,
+          ...(options?.projectId ? { projectId: options.projectId } : {}),
+        },
         id,
         timestamp: Date.now(),
       };
@@ -426,7 +441,7 @@ export function useWebSocket() {
   );
 
   return {
-    messages, isConnected, sendMessage, taskEvents, contentEvents, agentActivity, workflowEvents, goalEvents,
+    messages, isConnected, sendMessage, taskEvents, contentEvents, agentActivity, workflowEvents, goalEvents, siteEvents,
     wsRef,
     voiceCallbacksRef,
   };

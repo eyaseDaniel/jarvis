@@ -726,6 +726,44 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       }
     }
 
+    // 10a-2. Site Builder Service
+    if (jarvisConfig.sites?.enabled !== false) {
+      try {
+        const { SiteBuilderService } = await import('../sites/service.ts');
+        const sitesConfig = jarvisConfig.sites ?? {
+          enabled: true,
+          projects_dir: '~/.jarvis/projects',
+          port_range_start: 4000,
+          port_range_end: 4999,
+          auto_commit: true,
+          max_concurrent_servers: 3,
+        };
+        const siteBuilderService = new SiteBuilderService(sitesConfig);
+        await siteBuilderService.start();
+        apiContext.siteBuilderService = siteBuilderService;
+        registry.register(siteBuilderService);
+
+        // Wire proxy into WebSocket server for dev server HTTP/WS forwarding
+        wsService.getServer().setSiteProxy(siteBuilderService.proxy);
+
+        // Register builder tools into the agent's tool registry
+        const { createSiteBuilderTools } = await import('../sites/builder-tools.ts');
+        const builderTools = createSiteBuilderTools(siteBuilderService.projectManager, siteBuilderService.gitManager, siteBuilderService.githubManager);
+        const toolReg = orchestrator.getToolRegistry();
+        if (toolReg) {
+          for (const tool of builderTools) toolReg.register(tool);
+          console.log(`[Daemon] Registered ${builderTools.length} site builder tools`);
+        }
+
+        // Wire site builder into WebSocket service for project-scoped chat
+        wsService.setSiteBuilderService(siteBuilderService);
+
+        console.log('[Daemon] Site builder service started');
+      } catch (err) {
+        console.error('[Daemon] Site builder failed to start:', err instanceof Error ? err.message : err);
+      }
+    }
+
     // 10b. Workflow Automation Engine (M14)
     const workflowConfig = jarvisConfig.workflows;
     if (workflowConfig?.enabled !== false) {

@@ -236,11 +236,14 @@ export class AgentService implements Service, IAgentService {
   /**
    * Stream a message through the agent. Returns a stream and an onComplete callback.
    */
-  streamMessage(text: string, channel: string = 'websocket'): {
+  streamMessage(text: string, channel: string = 'websocket', siteContext?: string): {
     stream: AsyncIterable<LLMStreamEvent>;
     onComplete: (fullText: string) => Promise<void>;
   } {
-    const systemPrompt = this.buildFullSystemPrompt(channel, text);
+    let systemPrompt = this.buildFullSystemPrompt(channel, text);
+    if (siteContext) {
+      systemPrompt += '\n\n' + siteContext;
+    }
 
     const stream = this.orchestrator.streamMessage(systemPrompt, text);
 

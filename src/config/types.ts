@@ -160,6 +160,14 @@ export type JarvisConfig = {
   };
   workflows?: WorkflowConfig;
   goals?: GoalConfig;
+  sites?: {
+    enabled: boolean;
+    projects_dir: string;
+    port_range_start: number;
+    port_range_end: number;
+    auto_commit: boolean;
+    max_concurrent_servers: number;
+  };
   authority: AuthorityConfig;
   heartbeat: HeartbeatConfig;
   active_role: string;  // role file name
@@ -249,6 +257,14 @@ export const DEFAULT_CONFIG: JarvisConfig = {
       'adaptive',
     ],
     assistant_name: 'Jarvis',
+  },
+  sites: {
+    enabled: true,
+    projects_dir: '~/.jarvis/projects',
+    port_range_start: 4000,
+    port_range_end: 4999,
+    auto_commit: true,
+    max_concurrent_servers: 3,
   },
   authority: {
     default_level: 3,

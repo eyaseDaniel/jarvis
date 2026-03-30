@@ -13,6 +13,7 @@ import type { ChannelService } from './channel-service.ts';
 import type { Commitment } from '../vault/commitments.ts';
 import type { ContentItem } from '../vault/content-pipeline.ts';
 import type { STTProvider, TTSProvider } from '../comms/voice.ts';
+import { setDefaultCwd } from '../actions/tools/builtin.ts';
 import type { ApprovalRequest } from '../authority/approval.ts';
 import type { EmergencyState } from '../authority/emergency.ts';
 import { createCommitment, updateCommitmentStatus, updateCommitmentAssignee } from '../vault/commitments.ts';
@@ -40,6 +41,7 @@ export class WebSocketService implements Service {
   private ttsProvider: TTSProvider | null = null;
   private sttProvider: STTProvider | null = null;
   private voiceSessions = new Map<ServerWebSocket<unknown>, VoiceSession>();
+  private siteBuilderService: import('../sites/service.ts').SiteBuilderService | null = null;
 
   constructor(port: number, agentService: AgentService) {
     this.port = port;
@@ -58,6 +60,13 @@ export class WebSocketService implements Service {
         console.error('[WSService] Failed to update task assignee:', err);
       }
     });
+  }
+
+  /**
+   * Set the site builder service for project-scoped chat.
+   */
+  setSiteBuilderService(svc: import('../sites/service.ts').SiteBuilderService): void {
+    this.siteBuilderService = svc;
   }
 
   /**
@@ -423,6 +432,28 @@ export class WebSocketService implements Service {
     this.wsServer.broadcast(message);
   }
 
+  broadcastSiteEvent(event: { type: string; projectId: string; data: Record<string, unknown>; timestamp: number }): void {
+    const message: WSMessage = {
+      type: 'site_event',
+      payload: event,
+      timestamp: event.timestamp,
+    };
+    this.wsServer.broadcast(message);
+  }
+
+  /**
+   * Format a FileEntry tree into a compact text listing.
+   */
+  private formatFileTree(entry: { name: string; path: string; type: 'file' | 'directory'; children?: { name: string; type: 'file' | 'directory' }[] }): string {
+    const lines: string[] = [];
+    if (entry.children) {
+      for (const child of entry.children) {
+        lines.push(child.type === 'directory' ? `${child.name}/` : child.name);
+      }
+    }
+    return lines.join('\n') + '\n';
+  }
+
   broadcastApprovalUpdate(request: ApprovalRequest): void {
     const message: WSMessage = {
       type: 'notification',
@@ -480,8 +511,9 @@ export class WebSocketService implements Service {
    * Auto-creates a task for non-trivial messages so the task board tracks agent work.
    */
   private async handleChat(msg: WSMessage, ws?: ServerWebSocket<unknown>): Promise<WSMessage | void> {
-    const payload = msg.payload as { text?: string; channel?: string };
+    const payload = msg.payload as { text?: string; channel?: string; projectId?: string };
     const text = payload?.text;
+    const projectId = payload?.projectId ?? null;
 
     if (!text) {
       return {
@@ -494,6 +526,55 @@ export class WebSocketService implements Service {
 
     const channel = payload.channel ?? 'websocket';
     const requestId = msg.id ?? crypto.randomUUID();
+
+    // Build site builder system prompt context (injected into system prompt, not user message)
+    let siteContext: string | undefined;
+    if (projectId && this.siteBuilderService) {
+      // Project-scoped chat (from the Site Builder page)
+      const project = await this.siteBuilderService.getProjectWithStatus(projectId);
+      if (project) {
+        let fileTreeText = '';
+        try {
+          const tree = this.siteBuilderService.projectManager.getFileTree(projectId, 1);
+          fileTreeText = this.formatFileTree(tree);
+        } catch { /* ignore */ }
+
+        siteContext = `# Site Builder Context
+
+You are working on project "${project.name}" (${project.framework}).
+- Path: ${project.path}
+- Branch: ${project.gitBranch ?? 'main'}
+- Dev server: ${project.status}
+${project.githubUrl ? `- GitHub: ${project.githubUrl}` : ''}
+${fileTreeText ? `\n## Project Structure\n\`\`\`\n${fileTreeText}\`\`\`` : ''}
+
+## Rules
+- Use site_read_file, site_write_file, site_list_files, site_run_command, site_git_commit, site_github_push tools with project_id="${projectId}".
+- Do NOT use regular read_file, write_file, or run_command — always use the site_* variants.
+- Do NOT start dev servers via site_run_command. The dev server is managed by the dashboard (make dev runs automatically).
+- Changes are auto-committed after this conversation turn completes.
+- For the "bun-react" framework: the server uses Bun.serve() with HTML imports (import from "./index.html"). Run with "bun --hot index.ts", NOT vite or webpack.`;
+      }
+    } else if (this.siteBuilderService) {
+      // General chat (main dashboard) — give the LLM awareness of site builder projects
+      try {
+        const projects = await this.siteBuilderService.listProjectsWithStatus();
+        if (projects.length > 0) {
+          const projectList = projects.map(p =>
+            `  - "${p.name}" (id: ${p.id}, framework: ${p.framework}, branch: ${p.gitBranch ?? 'main'}${p.githubUrl ? `, github: ${p.githubUrl}` : ''})`
+          ).join('\n');
+
+          siteContext = `# Site Builder
+
+You have access to the Site Builder feature with ${projects.length} project(s):
+${projectList}
+
+You can work on any of these projects using site builder tools (site_read_file, site_write_file, site_list_files, site_run_command, site_git_commit, site_github_push) by passing the project's id as project_id.
+When the user asks you to build, edit, or work on a website/app, use these tools to make changes directly in the project files.
+If the user wants to create a new project, tell them to use the Site Builder page (Sites tab in the sidebar) to create one first.`;
+        }
+      } catch { /* ignore — site builder may not be fully started */ }
+    }
 
     // Auto-create a task for non-trivial messages
     const isTrivial = text.trim().length < 10;
@@ -520,7 +601,14 @@ export class WebSocketService implements Service {
       const conversation = getOrCreateConversation(channel);
       addMessage(conversation.id, { role: 'user', content: text });
 
-      const { stream, onComplete } = this.agentService.streamMessage(text, channel);
+      // Set default cwd for general tools (run_command, read_file, etc.)
+      // so they operate in the project directory during site builder conversations
+      if (projectId && this.siteBuilderService) {
+        const projectPath = this.siteBuilderService.projectManager.getProjectPath(projectId);
+        setDefaultCwd(projectPath);
+      }
+
+      const { stream, onComplete } = this.agentService.streamMessage(text, channel, siteContext);
 
       // Set up streaming TTS: speak sentences as they arrive
       const ttsActive = !!(this.ttsProvider && ws);
@@ -619,10 +707,34 @@ export class WebSocketService implements Service {
         }
       }
 
+      // Clear site builder default cwd now that the turn is done
+      setDefaultCwd(null);
+
       // Fire-and-forget: run post-processing (extraction, personality)
       onComplete(fullText).catch((err) =>
         console.error('[WSService] onComplete error:', err)
       );
+
+      // Auto-commit site builder changes after chat turn
+      if (projectId && this.siteBuilderService) {
+        try {
+          const projectPath = this.siteBuilderService.projectManager.getProjectPath(projectId);
+          if (projectPath) {
+            const commitMsg = text.length > 60 ? text.slice(0, 57) + '...' : text;
+            const commit = await this.siteBuilderService.gitManager.autoCommit(projectPath, commitMsg);
+            if (commit) {
+              this.broadcastSiteEvent({
+                type: 'git_commit',
+                projectId,
+                data: { commit },
+                timestamp: Date.now(),
+              });
+            }
+          }
+        } catch (err) {
+          console.error('[WSService] Site builder auto-commit error:', err);
+        }
+      }
 
       // Don't return a direct response — StreamRelay already broadcast everything
       return undefined;

@@ -13,7 +13,8 @@ export type WSMessage = {
   type: 'chat' | 'command' | 'status' | 'stream' | 'error' | 'notification'
       | 'tts_start' | 'tts_end' | 'voice_start' | 'voice_end'
       | 'workflow_event'
-      | 'goal_event';
+      | 'goal_event'
+      | 'site_event';
   payload: unknown;
   id?: string;
   priority?: 'urgent' | 'normal' | 'low';
@@ -53,6 +54,29 @@ function isPublicRoute(pathname: string, method: string): boolean {
   );
 }
 
+/** Simple sliding-window rate limiter for proxy requests */
+class ProxyRateLimiter {
+  private windowMs: number;
+  private maxRequests: number;
+  private requests: number[] = [];
+
+  constructor(windowMs = 10_000, maxRequests = 200) {
+    this.windowMs = windowMs;
+    this.maxRequests = maxRequests;
+  }
+
+  allow(): boolean {
+    const now = Date.now();
+    // Evict stale entries
+    while (this.requests.length > 0 && this.requests[0]! < now - this.windowMs) {
+      this.requests.shift();
+    }
+    if (this.requests.length >= this.maxRequests) return false;
+    this.requests.push(now);
+    return true;
+  }
+}
+
 export class WebSocketServer {
   private server: Server<any> | null = null;
   private clients: Set<ServerWebSocket<unknown>> = new Set();
@@ -65,6 +89,7 @@ export class WebSocketServer {
   private sidecarManager: SidecarManager | null = null;
   private authToken: string | null = null;
   private corsOrigin: string | null = null;
+  private proxyLimiter = new ProxyRateLimiter();
 
   constructor(port: number = 3142) {
     this.port = port;
@@ -81,6 +106,12 @@ export class WebSocketServer {
 
   setSidecarManager(manager: SidecarManager): void {
     this.sidecarManager = manager;
+  }
+
+  private siteProxy: import('../sites/proxy.ts').SiteProxy | null = null;
+
+  setSiteProxy(proxy: import('../sites/proxy.ts').SiteProxy): void {
+    this.siteProxy = proxy;
   }
 
   /**
@@ -117,7 +148,7 @@ export class WebSocketServer {
     this.startTime = Date.now();
     const self = this;
 
-    this.server = Bun.serve<{ sidecar_id?: string }>({
+    this.server = Bun.serve<{ sidecar_id?: string; proxy_target?: string; _proxyUpstream?: WebSocket }>({
       port: this.port,
       idleTimeout: 30, // seconds — prevent timeout during heavy processing (OCR, PowerShell)
 
@@ -175,8 +206,14 @@ export class WebSocketServer {
           }
         }
 
-        // 2. WebSocket upgrade
+        // 2. WebSocket upgrade — validate Origin to block cross-origin connections
+        //    (e.g., dev server iframes on different ports attempting ws://localhost:3142/ws)
         if (pathname === '/ws') {
+          const origin = req.headers.get('origin');
+          const expectedOrigin = self.corsOrigin || `http://localhost:${self.port}`;
+          if (origin && origin !== expectedOrigin) {
+            return new Response('Forbidden: origin mismatch', { status: 403 });
+          }
           const success = server.upgrade(req, { data: {} });
           if (success) return undefined;
           return new Response('WebSocket upgrade failed', { status: 500 });
@@ -190,6 +227,34 @@ export class WebSocketServer {
             clients: self.clients.size,
             timestamp: Date.now(),
           });
+        }
+
+        // 3b. Site builder proxy — intercept before API route matching
+        if (self.siteProxy && pathname.startsWith('/api/sites/') && pathname.includes('/proxy')) {
+          const match = self.siteProxy.matchProxy(pathname);
+          if (match) {
+            // Rate limit proxy requests
+            if (!self.proxyLimiter.allow()) {
+              return new Response(JSON.stringify({ error: 'Too many proxy requests' }), {
+                status: 429,
+                headers: { 'Content-Type': 'application/json', 'Retry-After': '10' },
+              });
+            }
+            // WebSocket upgrade for HMR — bridge to dev server
+            if (req.headers.get('upgrade')?.toLowerCase() === 'websocket') {
+              const targetUrl = self.siteProxy.getWebSocketTarget(match.projectId, match.subPath);
+              if (!targetUrl) {
+                return new Response('Dev server not running', { status: 502 });
+              }
+              const success = server.upgrade(req, {
+                data: { proxy_target: targetUrl },
+              });
+              if (success) return undefined;
+              return new Response('WebSocket upgrade failed', { status: 500 });
+            }
+            // HTTP proxy
+            return self.siteProxy.proxyHttp(req, match.projectId, match.subPath);
+          }
         }
 
         // 4. API routes
@@ -289,7 +354,29 @@ export class WebSocketServer {
       },
 
       websocket: {
+        // Limit individual WS messages to 16 MB (defense against abusive HMR payloads)
+        maxPayloadLength: 16 * 1024 * 1024,
+
         open(ws) {
+          // HMR proxy WebSocket — bridge to dev server
+          const proxyTarget = (ws.data as any)?.proxy_target as string | undefined;
+          if (proxyTarget) {
+            const upstream = new WebSocket(proxyTarget);
+            (ws.data as any)._proxyUpstream = upstream;
+            upstream.onmessage = (e) => {
+              try {
+                // Enforce size limit on upstream messages too
+                const data = e.data;
+                const size = typeof data === 'string' ? data.length : (data as ArrayBuffer).byteLength ?? 0;
+                if (size > 16 * 1024 * 1024) return; // drop oversized frames
+                ws.send(data);
+              } catch { /* client gone */ }
+            };
+            upstream.onerror = () => { try { ws.close(); } catch { /* ignore */ } };
+            upstream.onclose = () => { try { ws.close(); } catch { /* ignore */ } };
+            return;
+          }
+
           const sidecarId = (ws.data as any)?.sidecar_id as string | undefined;
           if (sidecarId && self.sidecarManager) {
             self.sidecarManager.handleSidecarConnect(ws, sidecarId);
@@ -302,6 +389,15 @@ export class WebSocketServer {
         },
 
         async message(ws, message) {
+          // HMR proxy — forward to upstream dev server
+          const proxyUpstream = (ws.data as any)?._proxyUpstream as WebSocket | undefined;
+          if (proxyUpstream) {
+            if (proxyUpstream.readyState === WebSocket.OPEN) {
+              proxyUpstream.send(message);
+            }
+            return;
+          }
+
           const sidecarId = (ws.data as any)?.sidecar_id as string | undefined;
           if (sidecarId && self.sidecarManager) {
             self.sidecarManager.handleSidecarMessage(ws, message);
@@ -352,6 +448,13 @@ export class WebSocketServer {
         },
 
         close(ws) {
+          // HMR proxy cleanup
+          const proxyUpstream = (ws.data as any)?._proxyUpstream as WebSocket | undefined;
+          if (proxyUpstream) {
+            try { proxyUpstream.close(); } catch { /* ignore */ }
+            return;
+          }
+
           const sidecarId = (ws.data as any)?.sidecar_id as string | undefined;
           if (sidecarId && self.sidecarManager) {
             self.sidecarManager.handleSidecarDisconnect(sidecarId);

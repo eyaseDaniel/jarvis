@@ -19,8 +19,9 @@ const AwarenessPage = React.lazy(() => import("./pages/AwarenessPage"));
 const WorkflowsPage = React.lazy(() => import("./pages/WorkflowsPage"));
 const GoalsPage = React.lazy(() => import("./pages/GoalsPage"));
 const DashboardPage = React.lazy(() => import("./pages/DashboardPage"));
+const SitesPage = React.lazy(() => import("./pages/SitesPage"));
 
-type Route = "dashboard" | "chat" | "tasks" | "pipeline" | "memory" | "calendar" | "office" | "knowledge" | "command" | "authority" | "awareness" | "workflows" | "goals" | "settings";
+type Route = "dashboard" | "chat" | "tasks" | "pipeline" | "memory" | "calendar" | "office" | "knowledge" | "command" | "authority" | "awareness" | "workflows" | "goals" | "sites" | "settings";
 
 export type SettingsSection = "general" | "llm" | "channels" | "integrations" | "sidecar";
 
@@ -29,7 +30,7 @@ const SETTINGS_SECTIONS: SettingsSection[] = ["general", "llm", "channels", "int
 function getRoute(): Route {
   const hash = window.location.hash.replace("#/", "");
   if (hash.startsWith("settings")) return "settings";
-  if (["dashboard", "chat", "tasks", "pipeline", "memory", "calendar", "office", "knowledge", "command", "authority", "awareness", "workflows", "goals"].includes(hash)) {
+  if (["dashboard", "chat", "tasks", "pipeline", "memory", "calendar", "office", "knowledge", "command", "authority", "awareness", "workflows", "goals", "sites"].includes(hash)) {
     return hash as Route;
   }
   return "dashboard";
@@ -71,6 +72,7 @@ const NAV_CORE: NavEntry[] = [
   { icon: "\u25CE", label: "Chat",       route: "chat" },
   { icon: "\u25C6", label: "Goals",      route: "goals" },
   { icon: "\u2B21", label: "Workflows",  route: "workflows" },
+  { icon: "\u25A0", label: "Sites",      route: "sites" },
 ];
 
 const NAV_INTEL: NavEntry[] = [
@@ -248,6 +250,7 @@ export function App() {
           {route === "awareness" && <AwarenessPage />}
           {route === "workflows" && <WorkflowsPage workflowEvents={ws.workflowEvents} sendMessage={ws.sendMessage} />}
           {route === "goals" && <GoalsPage goalEvents={ws.goalEvents} />}
+          {route === "sites" && <SitesPage sendMessage={ws.sendMessage} isConnected={ws.isConnected} messages={ws.messages} />}
           {route === "authority" && <AuthorityPage />}
           {route === "settings" && <SettingsPage section={settingsSection} />}
         </React.Suspense>
